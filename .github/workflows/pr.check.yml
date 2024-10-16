@@ -14,7 +14,7 @@ jobs:
       id-token: write
     if: always() && github.event.action == 'opened'
     continue-on-error: true
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
 
       # Set label on PR
@@ -79,7 +79,7 @@ jobs:
       pull-requests: write
     if: always() && github.event.action == 'opened'
     continue-on-error: true
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Check branch name
         uses: deepakputhraya/action-branch-name@master
@@ -134,7 +134,7 @@ jobs:
       pull-requests: write
     if: always() && (github.event.action == 'opened' || github.event.changes.title.from)
     continue-on-error: true
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       # When the PR consists of multiple commits, the title is based on the branch name. #* E.g. feature/FKP-123-my-feature → Feature/FKP 123 my feature
       - run: echo "DEFAULT_TITLE=$(echo "${{ github.event.pull_request.title }}" | tr '[:upper:]' '[:lower:]' | grep -Pq '^${{ env.BRANCH_PREFIXES }}\/\w+\s\d+.+$' && echo true || echo false)" >> $GITHUB_ENV
