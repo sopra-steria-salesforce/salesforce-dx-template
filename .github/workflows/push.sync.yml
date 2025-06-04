@@ -112,7 +112,7 @@ jobs:
       - name: '[Fallback] Post to Slack'
         id: slack-sync-post
         if: steps.push.outcome != 'success' && vars.SF_SLACK_ENABLED == 'true'
-        uses: slackapi/slack-github-action@v1.25.0
+        uses: slackapi/slack-github-action@v2.1.0
         with:
           channel-id: ${{ vars.SF_SLACK_SYNC_CHANNEL_ID }}
           payload: |
@@ -178,7 +178,7 @@ jobs:
       - name: 'Update Slack Error Post'
         id: slack-sync-post
         if: steps.cache-thread-ts.outputs.cache-hit == 'true'
-        uses: slackapi/slack-github-action@v1.25.0
+        uses: slackapi/slack-github-action@v2.1.0
         with:
           channel-id: ${{ vars.SF_SLACK_SYNC_CHANNEL_ID }}
           update-ts: ${{ steps.slack-post.outputs.ts }}
