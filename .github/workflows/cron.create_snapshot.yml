@@ -1,0 +1,174 @@
+name: '[CRON] Create Snapshot'
+on:
+  workflow_dispatch: # run from the UI
+  schedule:
+    - cron: '0 4 * * *'
+
+jobs:
+  init-and-validate:
+    name: Init and validate
+    runs-on: ubuntu-latest
+    if: vars.ENABLE_SNAPSHOT_GENERATION == 'true'
+    steps:
+      - uses: sopra-steria-salesforce/sf-cli-setup@v1
+        with:
+          sf-cli-version: 2.98.6
+          username: ${{ vars.SF_PROD_USERNAME }}
+          client-id: ${{ secrets.SF_PROD_CLIENT_ID }}
+          private-key: ${{ secrets.SF_PROD_PRIVATE_KEY }}
+          set-default-org: true
+
+      - name: Trim repo name to 15 chars and replace dashes
+        id: process-name
+        run: |
+          REPO_NAME="${{ github.event.repository.name }}"
+          SNAPSHOT_NAME="${REPO_NAME//-/_}"; SNAPSHOT_NAME="${SNAPSHOT_NAME:0:15}"
+          echo "SNAPSHOT_NAME=$SNAPSHOT_NAME" >> "$GITHUB_OUTPUT"
+      # Kan bruke siste 15 også: SNAPSHOT_NAME="${REPO_NAME: -15}"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check for changes in metadata or dependencies
+        id: check-changes
+        run: |
+          set +e  # allow sf command to fail without killing the step
+          SNAPSHOT_JSON=$(sf org get snapshot -s "$SNAPSHOT_NAME"  --target-dev-hub ${{vars.SF_PROD_USERNAME}} --json 2>/dev/null)
+          STATUS=$?
+          set -e  # restore fail-fast
+
+          if [ "$STATUS" -ne 0 ] || [ -z "$SNAPSHOT_JSON" ]; then
+            echo "::notice::❗ No snapshot found for repo. Will create snapshot."
+            echo "SNAPSHOT_CREATE=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          SNAPSHOT_DATE=$(echo "$SNAPSHOT_JSON" | jq -r '.result.CreatedDate')
+
+          # Check for commits in force-app or sfdx-project.json since snapshot date
+          COMMITS=$(git log --oneline --since="$SNAPSHOT_DATE" -- force-app/ sfdx-project.json 2>/dev/null | wc -l)
+
+          echo "$COMMITS"
+          if [ "$COMMITS" -gt 0 ]; then
+              echo "::notice::🔄 Changes to ./force-app or ./sfdx-project.json, will re-create snapshot."
+              echo "SNAPSHOT_CREATE=true" >> $GITHUB_OUTPUT
+          else
+              echo "::notice::✅ NO changes to ./force-app or ./sfdx-project.json, will keep old snapshot."
+              echo "SNAPSHOT_CREATE=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          SNAPSHOT_NAME: ${{ steps.process-name.outputs.SNAPSHOT_NAME }}
+    outputs:
+      SNAPSHOT_CREATE: ${{ steps.check-changes.outputs.SNAPSHOT_CREATE || 'false'}}
+      SNAPSHOT_NAME: ${{steps.process-name.outputs.SNAPSHOT_NAME}}
+
+  scratch-org-ssdx:
+    name: Create scratch org
+    needs: init-and-validate
+    if: needs.init-and-validate.outputs.SNAPSHOT_CREATE == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sopra-steria-salesforce/sf-cli-setup@v1
+        with:
+          sf-cli-version: 2.98.6
+          username: ${{ vars.SF_PROD_USERNAME }}
+          client-id: ${{ secrets.SF_PROD_CLIENT_ID }}
+          private-key: ${{ secrets.SF_PROD_PRIVATE_KEY }}
+          set-default-dev-hub: true
+      - run: mkdir -p .sf && echo "${{secrets.SF_PACKAGE_KEY}}" > .sf/package.key
+      - uses: actions/create-github-app-token@v2
+        id: generate_token
+        with:
+          app-id: ${{ secrets.SF_GITHUB_BOT_APP_ID }}
+          private-key: ${{ secrets.SF_GITHUB_BOT_PRIVATE_KEY }}
+      - uses: actions/setup-node@v4
+        with:
+          cache: npm # fetch cache of packages to install
+          token: ${{ steps.generate_token.outputs.token }} # needs custom token to avoid rate limit
+          node-version: 20
+      - run: npm ci --prefer-offline --no-audit # force offline installs for quicker run
+
+      - name: Create scratch org with SSDX
+        run: npx ssdx-cli create -n snapshot -d 1 --disable-notifications --ci
+
+      - name: Output Scratch Org Auth
+        id: new-scratch-org
+        run: |
+          org=$(sf org:display --target-org snapshot --json)
+          echo "username=$(echo $org | jq -r '.result.username' )" >> $GITHUB_OUTPUT
+          echo "instanceUrl=$(echo $org | jq -r '.result.instanceUrl' )" >> $GITHUB_OUTPUT
+    outputs:
+      INSTANCE_URL: ${{ steps.new-scratch-org.outputs.instanceUrl}}
+      USERNAME: ${{steps.new-scratch-org.outputs.username}}
+
+  create-snapshot:
+    name: Create snapshot
+    needs: [init-and-validate, scratch-org-ssdx]
+    permissions:
+      contents: write
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: generate_token
+        with:
+          app-id: ${{ secrets.SF_GITHUB_BOT_APP_ID }}
+          private-key: ${{ secrets.SF_GITHUB_BOT_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.generate_token.outputs.token }} # allows push to master
+      - uses: sopra-steria-salesforce/sf-cli-setup@v1
+        with:
+          sf-cli-version: 2.98.6
+          username: ${{ vars.SF_PROD_USERNAME }}
+          client-id: ${{ secrets.SF_PROD_CLIENT_ID }}
+          private-key: ${{ secrets.SF_PROD_PRIVATE_KEY }}
+          set-default-dev-hub: true
+      - name: Authenticate Scratch Org
+        uses: sopra-steria-salesforce/sf-cli-setup@v1
+        with:
+          sf-cli-version: 2.98.6
+          username: ${{ env.USERNAME }}
+          instance-url: ${{ env.INSTANCE_URL }}
+          client-id: ${{ secrets.SF_PROD_CLIENT_ID }}
+          private-key: ${{ secrets.SF_PROD_PRIVATE_KEY }}
+
+      # Delete Previous Snapshot
+      - name: Delete Previous Snapshot
+        continue-on-error: true
+        run: sf org delete snapshot --snapshot ${{env.SNAPSHOT_NAME}} --target-dev-hub ${{vars.SF_PROD_USERNAME}} --no-prompt
+
+      # Create snapshot
+      - name: Dispatch Snapshot Creation
+        run: sf org create snapshot --name ${{env.SNAPSHOT_NAME}} --source-org ${{env.USERNAME}} --target-dev-hub ${{vars.SF_PROD_USERNAME}} --description "Snapshot created from ${{github.event.repository.name}} repo"
+
+      - name: Generate snapshot scratch def
+        id: scratch-def
+        run: |
+          SNAP_FILE=./config/project-scratch-def-snapshot.json
+          CONFIG_FILE=./config/project-scratch-def.json
+
+          if [ ! -f $SNAP_FILE ]; then
+            echo "is_new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          jq -n \
+            --arg orgName "$(jq -r '.orgName' $CONFIG_FILE)" \
+            --arg language "$(jq -r '.language' $CONFIG_FILE)" \
+            --arg snapshot "$SNAPSHOT_NAME" \
+            '{ orgName: $orgName, snapshot: $snapshot, language: $language }' \
+            > final-config.json && mv final-config.json "$SNAP_FILE"
+
+      - name: Check for Changes in project-scratch-def-snapshot.json
+        id: diff
+        run: git diff --exit-code ./config/project-scratch-def-snapshot.json && echo "is_changed=false" >> "$GITHUB_OUTPUT" || echo "is_changed=true" >> "$GITHUB_OUTPUT"
+      - uses: fregante/setup-git-user@v2
+      - run: git add ./config/project-scratch-def-snapshot.json &&  git commit -m '[CI] Updated Snapshot Name in Scratch Def' && git push origin HEAD:${{ github.ref_name }}
+        if: steps.diff.outputs.is_changed == 'true' || steps.scratch-def.outputs.is_new == 'true'
+    env:
+      SNAPSHOT_NAME: ${{needs.init-and-validate.outputs.SNAPSHOT_NAME}}
+      INSTANCE_URL: ${{needs.scratch-org-ssdx.outputs.INSTANCE_URL}}
+      USERNAME: ${{needs.scratch-org-ssdx.outputs.USERNAME}}
