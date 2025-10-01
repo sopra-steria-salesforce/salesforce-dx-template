@@ -4,9 +4,10 @@ on:
     types:
       - opened
       - synchronize
-    paths-ignore:
-      - 'package.json'
-      - 'package-lock.json'
+    paths:
+      - 'force-app/**'
+      - 'unpackaged/**'
+      - 'config/**'
 concurrency:
   group: validation-${{ github.base_ref }}-${{ github.head_ref }}
   cancel-in-progress: true
@@ -65,7 +66,7 @@ jobs:
         if: steps.dependencies-cache.outputs.cache-hit != 'true' && steps.dependencies.outputs.exists == 'true'
         uses: sopra-steria-salesforce/sf-cli-setup@v1
         with:
-          sf-cli-version: 2.98.6
+          sf-cli-version: 2.104.6
           username: ${{ vars.SF_PROD_USERNAME }}
           client-id: ${{ secrets.SF_PROD_CLIENT_ID }}
           private-key: ${{ secrets.SF_PROD_PRIVATE_KEY }}
@@ -73,7 +74,7 @@ jobs:
         if: steps.dependencies-cache.outputs.cache-hit != 'true' && steps.dependencies.outputs.exists == 'true' && needs.scratch-org.outputs.username
         uses: sopra-steria-salesforce/sf-cli-setup@v1
         with:
-          sf-cli-version: 2.98.6
+          sf-cli-version: 2.104.6
           username: ${{ needs.scratch-org.outputs.username }}
           instance-url: ${{ needs.scratch-org.outputs.instanceUrl }}
           client-id: ${{ secrets.SF_PROD_CLIENT_ID }}
@@ -115,7 +116,7 @@ jobs:
         id: install-keys
         run: echo "keys=$(jq -c '.packageDirectories[0].dependencies[]' ./sfdx-project.json | while read -r dependency; do if echo $dependency | jq -e '.versionNumber' > /dev/null; then echo -n "$(echo $dependency | jq -r '.package'):${{ secrets.SF_PACKAGE_KEY }} "; fi; done)" >> $GITHUB_OUTPUT
 
-      # Install sf depenencies
+      # Install sf dependencies
       - run: npx sfp dependency:install --installationkeys "${{ steps.install-keys.outputs.keys }}" --targetusername ${{ needs.scratch-org.outputs.username }} --targetdevhubusername ${{ vars.SF_PROD_USERNAME }}
         if: steps.dependencies-cache.outputs.cache-hit != 'true' && steps.dependencies.outputs.exists == 'true'
 
@@ -135,7 +136,7 @@ jobs:
       - uses: sopra-steria-salesforce/sf-cli-setup@v1
         if: needs.scratch-org.outputs.username
         with:
-          sf-cli-version: 2.98.6
+          sf-cli-version: 2.104.6
           username: ${{ needs.scratch-org.outputs.username }}
           instance-url: ${{ needs.scratch-org.outputs.instanceUrl }}
           client-id: ${{ secrets.SF_PROD_CLIENT_ID }}
@@ -201,7 +202,7 @@ jobs:
       - uses: sopra-steria-salesforce/sf-cli-setup@v1
         if: needs.scratch-org.outputs.username
         with:
-          sf-cli-version: 2.98.6
+          sf-cli-version: 2.104.6
           username: ${{ needs.scratch-org.outputs.username }}
           instance-url: ${{ needs.scratch-org.outputs.instanceUrl }}
           client-id: ${{ secrets.SF_PROD_CLIENT_ID }}
@@ -273,20 +274,28 @@ jobs:
           totalLines=0
           for row in $(jq -c -r '.[]' <<< "$(cat tests/apex/test-result-codecoverage.json)"); do
             name=$(jq -r '.name' <<< $row)
+
+            # if the class in the code coverage report is a class in this repo, count the
             if [[ " ${classes[@]} " =~ " ${name} " ]]; then
             
               covered=$(jq '.totalCovered' <<< $row)
               lines=$(jq '.totalLines' <<< $row)
               
               if [[ $covered != "null" && $lines != "null" && $lines != "0" ]]; then
-                let totalCovered+=covered
-                let totalLines+=lines
+                totalCovered=$((totalCovered + covered))
+                totalLines=$((totalLines + lines))
               fi
             fi
           done
 
-          let codecoverage=totalCovered*100/totalLines
-          echo "codecoverage=$(echo $codecoverage)" >> $GITHUB_OUTPUT
+          # If no lines to cover, set coverage to 100%
+          if [[ $totalLines == "0" ]]; then
+            codecoverage=100
+          else
+            codecoverage=$((totalCovered * 100 / totalLines))
+          fi
+
+          echo "codecoverage=$codecoverage" >> $GITHUB_OUTPUT
 
       # Validate 85% Code Coverage
       - name: Validate 85% Code Coverage
