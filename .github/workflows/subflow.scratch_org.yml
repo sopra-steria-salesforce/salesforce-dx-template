@@ -11,6 +11,9 @@ on:
       deleteExistingScratchOrg:
         type: boolean
         default: false
+      createFromSnapshot:
+        type: boolean
+        default: true
       pr_number:
         type: string
     outputs:
@@ -188,11 +191,11 @@ jobs:
           set-default-dev-hub: true
 
       - name: Use Normal Config File
-        if: needs.init.outputs.disableSnapshot == 'true'
+        if: needs.init.outputs.disableSnapshot == 'true' || !inputs.createFromSnapshot
         run: echo "CONFIG_FILE=${{ env.NORMAL_CONFIG_FILE }}" >> $GITHUB_ENV
 
       - name: Use Snapshot Config File (if it exists)
-        if: needs.init.outputs.disableSnapshot == 'false'
+        if: needs.init.outputs.disableSnapshot == 'false' && inputs.createFromSnapshot
         run: echo "CONFIG_FILE=$([ -f ${{ env.SNAPSHOT_CONFIG_FILE }} ] && echo ${{ env.SNAPSHOT_CONFIG_FILE }} || echo ${{ env.NORMAL_CONFIG_FILE }})" >> $GITHUB_ENV
 
       - name: Create scratch org
