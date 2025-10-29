@@ -8,7 +8,7 @@ jobs:
   init-and-validate:
     name: Init and validate
     runs-on: ubuntu-latest
-    if: vars.ENABLE_SNAPSHOT_GENERATION == 'true'
+    if: vars.SF_ENABLE_SNAPSHOT_GENERATION == 'true'
     steps:
       - uses: sopra-steria-salesforce/sf-cli-setup@v1
         with:
@@ -106,7 +106,7 @@ jobs:
 
   create-snapshot:
     name: Create snapshot
-    needs: [init-and-validate, scratch-org-ssdx]
+    needs: [scratch-org-ssdx]
     permissions:
       contents: write
       id-token: write
