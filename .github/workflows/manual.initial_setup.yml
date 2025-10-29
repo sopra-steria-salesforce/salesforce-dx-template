@@ -5,24 +5,31 @@ on:
       set-labels:
         type: boolean
         default: true
+        description: 'Set labels?'
       set-repo-settings:
         type: boolean
         default: true
+        description: 'Set repo settings?'
       set-rulesets:
         type: boolean
         default: true
+        description: 'Set rulesets?'
       create-environments:
         type: boolean
         default: true
+        description: 'Create environments?'
       create-release:
         type: boolean
         default: true
+        description: 'Create release?'
       create-package:
         type: boolean
         default: true
+        description: 'Create package?'
       create-branches:
         type: boolean
         default: true
+        description: 'Create branches?'
 jobs:
   # -------------------------------------------------------------------------- #
   #                                   Labels                                   #
@@ -216,7 +223,7 @@ jobs:
       matrix:
         include:
           - ENV: prod
-            SETTINGS: '{ "wait_timer": 15, "deployment_branch_policy": { "custom_branch_policies": false, "protected_branches": true }}'
+            SETTINGS: '{"wait_timer": 15, "deployment_branch_policy": { "custom_branch_policies": false, "protected_branches": true }}'
           - ENV: preprod
             SETTINGS: '{ "deployment_branch_policy": { "custom_branch_policies": false, "protected_branches": true }}'
           - ENV: sit
@@ -391,14 +398,13 @@ jobs:
   create-branches:
     name: Create Branches
     if: inputs.create-branches
-    needs: create-package
     permissions:
       contents: write
       id-token: write
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        branch: [preprod]
+        branch: [preprod, uat]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/create-github-app-token@v2
