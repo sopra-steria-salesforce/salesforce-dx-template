@@ -222,7 +222,7 @@ jobs:
       - name: Upload Test Results
         # always() incudes cancelled, which is not needed here
         if: steps.test-classes-in-repo.outputs.classes && (success() || failure())
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: apex-tests
           path: ./tests/apex
